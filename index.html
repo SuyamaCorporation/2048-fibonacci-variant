@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>2048 フィボナッチ 変種</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .tile {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    font-weight: bold;
+    transition: transform 0.12s ease, left 0.12s ease, top 0.12s ease;
+    font-size: 1.5rem;
+  }
+  .tile.new-tile { animation: popIn 0.2s ease; }
+  .tile.merged-tile { animation: merge 0.15s ease; }
+  @keyframes popIn { 0% { transform: scale(0); } 80% { transform: scale(1.1); } 100% { transform: scale(1); } }
+  @keyframes merge { 0% { transform: scale(1); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
+  #game-board { position: relative; }
+</style>
+</head>
+<body class="bg-amber-50 min-h-screen flex flex-col items-center">
+<div class="w-full max-w-md mx-auto px-4 py-8">
+  <h1 class="text-3xl font-bold text-center text-amber-700 mb-1">2048 フィボナッチ</h1>
+  <p class="text-center text-amber-600 text-sm mb-4">1,1,2,3,5,8,13... で合体！</p>
+
+  <!-- スコアボード -->
+  <div class="flex gap-4 justify-center mb-4">
+    <div class="bg-amber-600 text-white rounded-xl px-6 py-3 text-center min-w-24">
+      <div class="text-xs opacity-80">スコア</div>
+      <div id="score" class="text-2xl font-bold">0</div>
+    </div>
+    <div class="bg-amber-800 text-white rounded-xl px-6 py-3 text-center min-w-24">
+      <div class="text-xs opacity-80">ベスト</div>
+      <div id="best" class="text-2xl font-bold">0</div>
+    </div>
+  </div>
+
+  <!-- ゲームボード -->
+  <div class="bg-amber-200 rounded-2xl p-3 mb-4 shadow-xl">
+    <div id="game-board" role="grid" aria-label="フィボナッチ2048ゲームボード" class="relative bg-amber-200 rounded-xl" style="width:340px;height:340px;">
+      <!-- background cells -->
+      <div class="absolute inset-0 grid grid-cols-4 gap-2 p-0" id="bg-cells"></div>
+    </div>
+  </div>
+
+  <!-- ボタン -->
+  <div class="flex gap-3 justify-center mb-4">
+    <button onclick="newGame()" aria-label="新しいゲームを開始" class="bg-amber-600 hover:bg-amber-700 text-white px-6 py-2 rounded-xl font-bold transition">新ゲーム</button>
+    <button onclick="undoMove()" aria-label="1手戻す" class="bg-amber-400 hover:bg-amber-500 text-white px-6 py-2 rounded-xl font-bold transition">↩ Undo</button>
+  </div>
+
+  <!-- ルール説明 -->
+  <div class="bg-white/70 rounded-xl p-4 text-sm text-amber-800">
+    <div class="font-bold mb-1">ルール</div>
+    <ul class="list-disc list-inside space-y-1 text-xs">
+      <li>矢印キー（またはスワイプ）でタイルを移動</li>
+      <li>同じフィボナッチ数値のタイルが合体 → 次のフィボナッチ数に進化</li>
+      <li>1+1=2, 1+2=3, 2+3=5, 3+5=8 ... (fib[n]+fib[n+1]=fib[n+2])</li>
+      <li>144（fib[12]）以上を目指そう！</li>
+    </ul>
+  </div>
+
+  <!-- ゲームオーバー -->
+  <div id="overlay" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true">
+    <div class="bg-white rounded-2xl p-8 text-center shadow-2xl">
+      <div id="overlay-msg" class="text-3xl font-bold text-amber-700 mb-2"></div>
+      <div id="overlay-score" class="text-lg text-gray-600 mb-6"></div>
+      <button onclick="newGame()" aria-label="もう一度プレイ" class="bg-amber-600 hover:bg-amber-700 text-white px-8 py-3 rounded-xl font-bold text-lg transition">もう一度</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Fibonacci sequence
+const FIB = [1];
+for (let i = 1; i <= 30; i++) {
+  if (i === 1) FIB.push(1);
+  else FIB.push(FIB[FIB.length-1] + FIB[FIB.length-2]);
+}
+
+function fibIndex(n) { return FIB.indexOf(n); }
+function nextFib(n) { const i = fibIndex(n); return i >= 0 && i < FIB.length-1 ? FIB[i+1] : null; }
+function canMerge(a, b) {
+  // adjacent fibonacci: fib[n] + fib[n+1] = fib[n+2], or same (1+1=2)
+  if (a === b && a === 1) return true;
+  const ia = fibIndex(a), ib = fibIndex(b);
+  if (ia < 0 || ib < 0) return false;
+  return Math.abs(ia - ib) === 1;
+}
+function mergedValue(a, b) {
+  if (a === b && a === 1) return 2;
+  const ia = fibIndex(a), ib = fibIndex(b);
+  return FIB[Math.max(ia, ib) + 1];
+}
+
+// Tile colors
+const COLORS = {
+  1:   { bg:'#f9f0d5', text:'#776e65' },
+  2:   { bg:'#ede0c8', text:'#776e65' },
+  3:   { bg:'#f2b179', text:'#f9f6f2' },
+  5:   { bg:'#f59563', text:'#f9f6f2' },
+  8:   { bg:'#f67c5f', text:'#f9f6f2' },
+  13:  { bg:'#f65e3b', text:'#f9f6f2' },
+  21:  { bg:'#edcf72', text:'#f9f6f2' },
+  34:  { bg:'#edcc61', text:'#f9f6f2' },
+  55:  { bg:'#edc850', text:'#f9f6f2' },
+  89:  { bg:'#edc53f', text:'#f9f6f2' },
+  144: { bg:'#edc22e', text:'#f9f6f2' },
+  233: { bg:'#3c3a32', text:'#f9f6f2' },
+  377: { bg:'#1a1815', text:'#f9f6f2' },
+  610: { bg:'#ff6b35', text:'#f9f6f2' },
+  987: { bg:'#c850c0', text:'#f9f6f2' },
+  1597:{ bg:'#4158d0', text:'#f9f6f2' },
+};
+
+const N = 4;
+const BOARD_SIZE = 340;
+const GAP = 10;
+const CELL_SIZE = (BOARD_SIZE - GAP * (N+1)) / N;
+
+let grid, score, bestScore, prevState, gameOver;
+
+function newGame() {
+  grid = Array.from({length:N}, () => Array(N).fill(0));
+  score = 0;
+  prevState = null;
+  gameOver = false;
+  bestScore = parseInt(localStorage.getItem('fib2048-best') || '0');
+  document.getElementById('overlay').classList.add('hidden');
+  addRandom();
+  addRandom();
+  updateScoreDisplay();
+  renderBoard();
+}
+
+function addRandom() {
+  const empty = [];
+  for (let r = 0; r < N; r++) for (let c = 0; c < N; c++) if (!grid[r][c]) empty.push([r,c]);
+  if (empty.length === 0) return;
+  const [r, c] = empty[Math.floor(Math.random() * empty.length)];
+  grid[r][c] = Math.random() < 0.8 ? 1 : 2;
+}
+
+function tileStyle(val) {
+  const color = COLORS[val] || { bg:'#3c3a32', text:'#f9f6f2' };
+  return `background:${color.bg};color:${color.text}`;
+}
+
+function renderBoard() {
+  const board = document.getElementById('game-board');
+  // remove old tiles
+  board.querySelectorAll('.tile').forEach(el => el.remove());
+  // draw bg
+  const bg = document.getElementById('bg-cells');
+  bg.innerHTML = '';
+  bg.style.cssText = `display:grid;grid-template-columns:repeat(4,1fr);gap:${GAP}px;padding:${GAP}px;position:absolute;inset:0;pointer-events:none;`;
+  for (let i = 0; i < N*N; i++) {
+    const cell = document.createElement('div');
+    cell.className = 'rounded-lg bg-amber-300/50';
+    bg.appendChild(cell);
+  }
+  // draw tiles
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N; c++) {
+      if (!grid[r][c]) continue;
+      const tile = document.createElement('div');
+      tile.className = 'tile';
+      tile.style.cssText = `${tileStyle(grid[r][c])};width:${CELL_SIZE}px;height:${CELL_SIZE}px;left:${GAP + c*(CELL_SIZE+GAP)}px;top:${GAP + r*(CELL_SIZE+GAP)}px;font-size:${CELL_SIZE > 60 ? '1.5rem' : '1.1rem'}`;
+      tile.textContent = grid[r][c];
+      board.appendChild(tile);
+    }
+  }
+}
+
+function move(dir) {
+  if (gameOver) return;
+  // save prev state
+  prevState = { grid: grid.map(r => [...r]), score };
+  let moved = false;
+  const merged = Array.from({length:N}, () => Array(N).fill(false));
+
+  const process = (line) => {
+    // compress
+    let result = line.filter(v => v !== 0);
+    for (let i = 0; i < result.length - 1; i++) {
+      if (!merged[0] && canMerge(result[i], result[i+1])) {
+        const nv = mergedValue(result[i], result[i+1]);
+        score += nv;
+        result[i] = nv;
+        result.splice(i+1, 1);
+        moved = true;
+      }
+    }
+    while (result.length < N) result.push(0);
+    return result;
+  };
+
+  if (dir === 'left') {
+    for (let r = 0; r < N; r++) {
+      const orig = [...grid[r]];
+      const res = process([...grid[r]]);
+      grid[r] = res;
+      if (orig.some((v,i) => v !== res[i])) moved = true;
+    }
+  } else if (dir === 'right') {
+    for (let r = 0; r < N; r++) {
+      const orig = [...grid[r]];
+      const res = process([...grid[r]].reverse()).reverse();
+      grid[r] = res;
+      if (orig.some((v,i) => v !== res[i])) moved = true;
+    }
+  } else if (dir === 'up') {
+    for (let c = 0; c < N; c++) {
+      const col = grid.map(r => r[c]);
+      const orig = [...col];
+      const res = process(col);
+      for (let r = 0; r < N; r++) grid[r][c] = res[r];
+      if (orig.some((v,i) => v !== res[i])) moved = true;
+    }
+  } else if (dir === 'down') {
+    for (let c = 0; c < N; c++) {
+      const col = grid.map(r => r[c]).reverse();
+      const orig = [...col];
+      const res = process(col).reverse();
+      for (let r = 0; r < N; r++) grid[r][c] = res[N-1-r] !== undefined ? res[r] : res[r];
+      // redo properly
+      const col2 = grid.map(r => r[c]);
+    }
+    // redo down properly
+    for (let c = 0; c < N; c++) {
+      const col = grid.map(r => r[c]);
+      const orig = [...col];
+      const res = process([...col].reverse()).reverse();
+      for (let r = 0; r < N; r++) grid[r][c] = res[r];
+      if (orig.some((v,i) => v !== res[i])) moved = true;
+    }
+  }
+
+  if (moved) {
+    addRandom();
+    if (score > bestScore) {
+      bestScore = score;
+      localStorage.setItem('fib2048-best', bestScore);
+    }
+    updateScoreDisplay();
+    renderBoard();
+    if (isGameOver()) {
+      gameOver = true;
+      document.getElementById('overlay-msg').textContent = 'ゲームオーバー！';
+      document.getElementById('overlay-score').textContent = `スコア: ${score}`;
+      document.getElementById('overlay').classList.remove('hidden');
+    }
+  }
+}
+
+function isGameOver() {
+  for (let r = 0; r < N; r++) {
+    for (let c = 0; c < N; c++) {
+      if (!grid[r][c]) return false;
+      if (c < N-1 && canMerge(grid[r][c], grid[r][c+1])) return false;
+      if (r < N-1 && canMerge(grid[r][c], grid[r+1][c])) return false;
+    }
+  }
+  return true;
+}
+
+function undoMove() {
+  if (!prevState) return;
+  grid = prevState.grid;
+  score = prevState.score;
+  prevState = null;
+  gameOver = false;
+  updateScoreDisplay();
+  renderBoard();
+}
+
+function updateScoreDisplay() {
+  document.getElementById('score').textContent = score;
+  document.getElementById('best').textContent = bestScore;
+}
+
+// Keyboard
+document.addEventListener('keydown', e => {
+  const map = { ArrowLeft:'left', ArrowRight:'right', ArrowUp:'up', ArrowDown:'down' };
+  if (map[e.key]) { e.preventDefault(); move(map[e.key]); }
+});
+
+// Touch/swipe
+let tx = 0, ty = 0;
+document.getElementById('game-board').addEventListener('touchstart', e => {
+  tx = e.touches[0].clientX; ty = e.touches[0].clientY;
+}, {passive:true});
+document.getElementById('game-board').addEventListener('touchend', e => {
+  const dx = e.changedTouches[0].clientX - tx;
+  const dy = e.changedTouches[0].clientY - ty;
+  if (Math.abs(dx) > Math.abs(dy)) { if (dx > 20) move('right'); else if (dx < -20) move('left'); }
+  else { if (dy > 20) move('down'); else if (dy < -20) move('up'); }
+}, {passive:true});
+
+newGame();
+</script>
+</body>
+</html>
